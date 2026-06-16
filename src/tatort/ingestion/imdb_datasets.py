@@ -21,7 +21,7 @@ FILES = {
 }
 RAW = Path("data/raw/imdb")
 OUT = Path("data/raw/imdb_ratings.parquet")
-HEADERS = {"User-Agent": "TatortDataScience/0.1 (portfolio project)"}
+HEADERS = {"User-Agent": "TatortDataScience/0.1 (portfolio project; firassakli82@gmail.com)"}
 
 
 def download(name: str, fname: str) -> Path:
