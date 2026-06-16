@@ -16,4 +16,7 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
-'@ | Set-Content -Path .gitignore -Encoding UTF8
+
+# but DO track the small processed artifacts the deployed app needs
+!data/processed/tatort.duckdb
+!data/processed/plot_embeddings.parquet
