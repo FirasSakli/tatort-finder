@@ -1,0 +1,9 @@
+services:
+  pipeline:
+    build: .
+    container_name: tatort-pipeline
+    volumes:
+      # Persist all data (scrapes, DuckDB, embeddings) on the host.
+      - ./data:/app/data
+    # Run the full pipeline by default; override on the command line for one step.
+    command: python run_pipeline.py
