@@ -1,12 +1,12 @@
 # 🔍 Tatort Finder
 
-**A content-based recommender and analytics tool for 50+ years of _Tatort_, Germany's longest-running crime series.**
+**A content-based recommender and analytics tool for 50+ years of _Tatort_, Germany's longest-running crime series — built as an end-to-end, orchestrated data pipeline.**
 
 🔗 **[Live demo →](https://tatort-finder-lbcrssgd9kx2y2cdirzno4.streamlit.app/)**
 
-> Pick a _Tatort_ episode you liked, get recommendations for similar ones — filtered by tone, browsable by detective team. Built end-to-end from public data: web scraping → multi-source entity resolution → NLP embeddings → an interactive, deployed app.
+> Pick a _Tatort_ episode you liked, get recommendations for similar ones — filtered by tone, browsable by detective team. Built end-to-end from public data: web scraping → multi-source entity resolution → NLP embeddings → an interactive app, all wrapped in a Dockerized pipeline orchestrated by Apache Airflow.
 
-![Screenshot](docs/screenshot.png)
+![Tatort Finder](docs/screenshot.png)
 
 ---
 
@@ -19,8 +19,6 @@ _Tatort_ has aired ~1,340 feature-length episodes since 1970, produced by rotati
 3. **Can we quantify each team's "tone" (how dark/violent) from plot text?** → Partially — validated against published statistics, with honest caveats.
 
 The deployed tool focuses on what _works for a user_: discovery by similarity and tone. The harder analytical findings live in this case study.
-
-
 
 ---
 
@@ -38,6 +36,20 @@ All data is free and public. Nothing is hand-collected.
 **Entity resolution was the hard part.** Wikipedia and IMDb share no common ID, so episodes were matched on normalized title + year, with a fuzzy-matching fallback (`thefuzz`) for spelling drift (ß↔ss, punctuation, dialect titles). Low-confidence matches were _rejected_ rather than forced, to avoid corrupting the target variable — final coverage **99.8%** (1,335/1,338), with the handful of genuine misses (IMDb-merged two-part episodes) left honestly unmatched.
 
 The plot scraper was built to be **polite** (rate-limited), **resumable** (incremental writes, skips already-fetched episodes on restart), and **failure-tolerant** (logs missing articles instead of crashing) — it recovered a cluster of transient network errors automatically on re-run.
+
+---
+
+## Orchestration & infrastructure
+
+The pipeline is **containerized with Docker** and **orchestrated with Apache Airflow**, so the whole flow runs reproducibly and on a schedule rather than as scripts run by hand.
+
+- **Docker** — the pipeline is packaged into an image (`Dockerfile`) with data persisted via a mounted volume, so the resumable scraper never redoes work and the embedding model downloads only once. Runtime dependencies are kept separate from build/analysis dependencies to keep the image lean.
+- **Airflow** — `airflow/dags/tatort_pipeline.py` defines the nine pipeline steps as tasks wired in strict dependency order (`scrape_list → imdb → clean → load → team_features → scrape_plots → load_plots → embeddings → death_features`), scheduled weekly for Sunday evenings (after each new episode airs). Every task's logs are captured and inspectable in the Airflow UI.
+- **LocalExecutor by deliberate choice** — the stack uses Airflow's LocalExecutor rather than Celery + Redis. For a single-node pipeline this is the right-sized option; a Celery broker and distributed workers would be over-engineering here. (The full Celery stack was set up and then simplified once it was clear distribution added cost without benefit.)
+
+<!-- TODO: add the DAG graph screenshot, e.g. ![Airflow DAG](docs/airflow_dag_graph.png) -->
+
+![Airflow DAG run](docs/airflow_dag_grid.png)
 
 ---
 
@@ -93,6 +105,8 @@ The same plot embeddings that _hurt_ the rating model _power_ the recommender �
 | **NLP / embeddings**  | `sentence-transformers` (multilingual MiniLM) over German plot text |
 | **ML**                | `scikit-learn`, `XGBoost`; ablation study with PCA                  |
 | **Validation**        | Benchmarking extracted features against published statistics        |
+| **Containerization**  | `Docker` — reproducible pipeline image + data volume                |
+| **Orchestration**     | `Apache Airflow` — 9-task DAG, weekly schedule, LocalExecutor       |
 | **App / deployment**  | `Streamlit`, deployed on Streamlit Community Cloud                  |
 | **Tooling**           | `uv` (deps), `git`, separated build- vs. runtime requirements       |
 
@@ -108,25 +122,42 @@ tatort-platform/
 │   ├── storage/                  # cleaning, fuzzy join, DuckDB loading
 │   ├── processing/               # team parsing, embeddings, death features
 │   └── models/                   # rating ablation, topics, recommender, team ranking
+├── run_pipeline.py               # single entrypoint; runs all steps or one named step
+├── Dockerfile                    # reproducible pipeline image
+├── docker-compose.yml            # pipeline + persistent data volume
+├── airflow/
+│   ├── Dockerfile                # Airflow image extended with pipeline deps
+│   ├── docker-compose.yaml       # Airflow stack (LocalExecutor)
+│   └── dags/tatort_pipeline.py   # the 9-task DAG
 ├── data/processed/               # DuckDB + embeddings (committed for the app)
 ├── requirements.txt              # lean runtime deps for deployment
 └── pyproject.toml
 ```
 
-To reproduce locally:
+To reproduce locally (plain Python):
 
 ```bash
 uv sync
-uv run python -m tatort.ingestion.wikipedia_list
-uv run python -m tatort.ingestion.imdb_datasets
-uv run python -m tatort.storage.clean
-uv run python -m tatort.storage.load
-uv run python -m tatort.processing.team_features
-uv run python -m tatort.ingestion.wikipedia_plots
-uv run python -m tatort.storage.load_plots
-uv run python -m tatort.processing.embeddings
-uv run python -m tatort.processing.death_features
+python run_pipeline.py            # runs the full pipeline in order
+# ...or run a single step:
+python run_pipeline.py embeddings
 uv run streamlit run app/streamlit_app.py
+```
+
+To run the pipeline in Docker:
+
+```bash
+docker compose build
+docker compose run --rm pipeline python run_pipeline.py
+```
+
+To orchestrate with Airflow:
+
+```bash
+cd airflow
+docker compose up airflow-init      # one-time DB + admin user setup
+docker compose up -d                # start the stack → UI at localhost:8080
+# the tatort_pipeline DAG appears in the UI; trigger or let it run on schedule
 ```
 
 ---
